@@ -1,6 +1,6 @@
 config_file="configs/debug.yaml"
 
-gpus=3,4
+gpus=0,1
 gpun=2
 master_port=29501
 
