@@ -1,19 +1,24 @@
-TASK: "ObjCls"
+TASK: "RelDet"
 MODEL:
+  WEIGHTS: ("outputs/objdet_best/model_8e.pth",)
   NUM_OBJ_CLASSES: 100
+  NUM_PRED_CLASSES: 46
+  IOU_FLOOR: 0.5
+  N2P: 3
   BACKBONE:
     ARCHITECTURE: "vgg16"
+  DETECTOR:
+    SCORE_THRESH: 0.01
+    NUM_DETECTIONS: 15
 DATASETS:
   TRAIN: ("vrs_train",)
   TEST: ("vrs_test",)
-INPUT:
-  SIZE: (224, 224)
 SOLVER:
   BATCH_SIZE: 32
-  LR: 0.005
+  LR: 0.02
   GAMMA: 0.1
-  MILESTONES: (4, 7)
-  MAX_EPOCH: 8
+  MILESTONES: (2, 4)
+  MAX_EPOCH: 5
   TEST_PERIOD: 1
   CHECKPOINT_PERIOD: 1
 TEST:

@@ -1,6 +1,8 @@
-TASK: "ObjCls"
+TASK: "PredCls"
 MODEL:
+  WEIGHTS: ("outputs/objcls_best/model_8e.pth",)
   NUM_OBJ_CLASSES: 100
+  NUM_PRED_CLASSES: 46
   BACKBONE:
     ARCHITECTURE: "vgg16"
 DATASETS:
@@ -10,7 +12,7 @@ INPUT:
   SIZE: (224, 224)
 SOLVER:
   BATCH_SIZE: 32
-  LR: 0.005
+  LR: 0.0005
   GAMMA: 0.1
   MILESTONES: (4, 7)
   MAX_EPOCH: 8

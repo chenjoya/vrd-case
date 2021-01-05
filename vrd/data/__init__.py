@@ -21,10 +21,8 @@ def build_dataset(dataset_list, dataset_catalog, cfg, is_train):
         data = dataset_catalog.get(dataset_name)
         factory = getattr(D, data["factory"])
         args = data["args"]
-        tasks = cfg.TASKS
-        input_size = cfg.INPUT.SIZE
-        args["tasks"] = tasks
-        args["input_size"] = input_size
+        args["task"] = cfg.TASK
+        args["input_size"] = cfg.INPUT.SIZE
         # make dataset from factory
         dataset = factory(**args)
         datasets.append(dataset)
@@ -88,7 +86,7 @@ def make_data_loader(cfg, is_train, is_distributed):
             dataset,
             num_workers=cfg.DATALOADER.NUM_WORKERS,
             batch_sampler=batch_sampler,
-            collate_fn=BatchCollator(is_train, tasks=cfg.TASKS),
+            collate_fn=BatchCollator(is_train, task=cfg.TASK),
         )
         data_loaders.append(data_loader)
     if is_train:

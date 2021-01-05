@@ -50,15 +50,17 @@ def main():
     from torch.utils.collect_env import get_pretty_env_info
     logger.info("\n" + get_pretty_env_info())
 
-    model = build_model(cfg, is_train=False)
+    model = build_model(cfg)
     model.to(cfg.MODEL.DEVICE)
 
-    weight_file =  cfg.MODEL.WEIGHT
-    assert weight_file != ""
-    
-    output_dir = os.path.dirname(weight_file)
+    weight_files =  cfg.MODEL.WEIGHTS
+    assert len(weight_files) > 0
+
+    basename = os.path.basename(args.config_file)
+    basename = os.path.splitext(basename)[0]
+    output_dir = os.path.join("outputs/", basename)
     checkpointer = Checkpointer(cfg, model, save_dir=output_dir)
-    _ = checkpointer.load(f=cfg.MODEL.WEIGHT, use_latest=False)
+    _ = checkpointer.load(fs=weight_files, use_latest=False)
     
     output_folders = [None] * len(cfg.DATASETS.TEST)
     dataset_names = cfg.DATASETS.TEST
@@ -69,17 +71,14 @@ def main():
             output_folders[idx] = output_folder
     data_loaders_val = make_data_loader(cfg, is_train=False, is_distributed=distributed)
     
-    basename = os.path.basename(weight_file)
-    save_json_basename = basename.replace('pth', 'json')
     for output_folder, dataset_name, data_loader_val in zip(output_folders, dataset_names, data_loaders_val):
-        save_json_file = os.path.join(output_folder, save_json_basename) if cfg.TEST.SAVE else ""
-        visualize_dir = output_folder if cfg.TEST.VISUALIZE else ""
         inference(
             model,
             data_loader_val,
             dataset_name=dataset_name,
-            save_json_file=save_json_file,
-            visualize_dir=visualize_dir,
+            task=cfg.TASK,
+            save_json_file="",
+            visualize_dir="",
             device=cfg.MODEL.DEVICE,
         )
         synchronize()

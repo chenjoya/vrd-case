@@ -46,26 +46,34 @@ class Checkpointer(object):
         torch.save(data, save_file)
         self.tag_last_checkpoint(save_file)
 
-    def load(self, f=None, use_latest=True):
+    # support multiple model initialization
+    def load(self, fs=None, use_latest=True):
+        goon = False
         if self.has_checkpoint() and use_latest:
             # override argument with existing checkpoint
-            f = self.get_checkpoint_file()
-        if not f:
-            # no checkpoint could be found
+            fs = (self.get_checkpoint_file(), )
+            # continue training
+            goon = True
+        
+        if not fs:
             self.logger.info("No checkpoint found. Ignore checkpoint initialization.")
             return {}
-        self.logger.info("Loading checkpoint from {}".format(f))
-        checkpoint = self._load_file(f)
-        self._load_model(checkpoint)
-        if "optimizer" in checkpoint and self.optimizer:
-            self.logger.info("Loading optimizer from {}".format(f))
-            self.optimizer.load_state_dict(checkpoint.pop("optimizer"))
-        if "scheduler" in checkpoint and self.scheduler:
-            self.logger.info("Loading scheduler from {}".format(f))
-            self.scheduler.load_state_dict(checkpoint.pop("scheduler"))
-
-        # return any further checkpoint data
-        return checkpoint
+        
+        self.logger.info("Loading checkpoint from {}".format(fs))
+        for f in fs:
+            checkpoint = self._load_file(f)
+            self._load_model(checkpoint)
+            if goon:
+                if "optimizer" in checkpoint and self.optimizer:
+                    self.logger.info("Loading optimizer from {}".format(f))
+                    self.optimizer.load_state_dict(checkpoint.pop("optimizer"))
+                if "scheduler" in checkpoint and self.scheduler:
+                    self.logger.info("Loading scheduler from {}".format(f))
+                    self.scheduler.load_state_dict(checkpoint.pop("scheduler"))
+                extra_checkpoint_data = checkpoint
+            else:
+                extra_checkpoint_data = {}
+        return extra_checkpoint_data
 
     def has_checkpoint(self):
         save_file = os.path.join(self.save_dir, "last_checkpoint")

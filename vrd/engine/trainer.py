@@ -13,6 +13,12 @@ from vrd.utils.metric_logger import MetricLogger
 from vrd.engine.inference import inference
 from vrd.utils.miscellaneous import mkdir
 
+def recursive_to_device(batch, device):
+    if isinstance(batch, (list,tuple)):
+        batch = [recursive_to_device(b, device) for b in batch]
+        return batch
+    return batch.to(device)
+
 def do_train(
     cfg,
     model,
@@ -39,22 +45,21 @@ def do_train(
         max_iteration = len(data_loader)
         last_epoch_iteration = (max_epoch - epoch) * max_iteration
         arguments["epoch"] = epoch
-	
+
         end = time.time()
-        for _iteration, (images, targets, _) in enumerate(data_loader):
+
+        for _iteration, batch in enumerate(data_loader):
             data_time = time.time() - end
             iteration = _iteration + 1
-
+            
             optimizer.zero_grad()
-            images = images.to(device)
-            for k, v in targets.items():
-                targets[k] = v.to(device)
-            loss_dict = model(images, targets)
+            batch = recursive_to_device(batch, device)
+            loss_dict = model(batch)
             losses = sum(loss for loss in loss_dict.values())
             losses.backward()
             optimizer.step()
             batch_time = time.time() - end
-
+            
             if iteration % 100 == 0 or iteration == max_iteration:
                   meters.update(time=batch_time, data=data_time)
                   loss_dict_reduced = reduce_dict(loss_dict)
@@ -84,31 +89,33 @@ def do_train(
                       )
                   )
             end = time.time()
-
+            
         scheduler.step()
 
         if epoch % checkpoint_period == 0:
             checkpointer.save(f"model_{epoch}e", **arguments)
 
         if data_loader_val is not None and test_period > 0 and epoch % test_period == 0:
-            dataset_names = cfg.DATASETS.TEST
-            dataset_name = dataset_names[0]
-            output_folder = os.path.join(output_dir, "inference", dataset_name)
-            save_json_basename = f"model_{epoch}e.json"
-            save_json_file = os.path.join(output_folder, save_json_basename)
-            mkdir(output_folder)
-            synchronize()
-            inference(
-                model,
-                data_loader_val[0],
-                dataset_name=dataset_name,
-                save_json_file=save_json_file,
-                visualize_dir="", # do not visualize here
-                device=cfg.MODEL.DEVICE,
-            )
-            synchronize()
-            model.train()
-
+                dataset_names = cfg.DATASETS.TEST
+                dataset_name = dataset_names[0]
+                output_folder = os.path.join(output_dir, "inference", dataset_name)
+                save_json_basename = f"model_{epoch}e.json"
+                save_json_file = os.path.join(output_folder, save_json_basename)
+                mkdir(output_folder)
+                synchronize()
+                inference(
+                    model,
+                    data_loader_val[0],
+                    dataset_name=dataset_name,
+                    task=cfg.TASK,
+                    save_json_file=save_json_file,
+                    visualize_dir="", # do not visualize here
+                    device=cfg.MODEL.DEVICE,
+                )
+                synchronize()
+                model.train()
+        
+        
     total_training_time = time.time() - start_training_time
     total_time_str = str(datetime.timedelta(seconds=total_training_time))
     logger.info(

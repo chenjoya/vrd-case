@@ -1,4 +1,4 @@
 from .model import Model
 
-def build_model(cfg, is_train):
-    return Model(cfg, is_train) 
+def build_model(cfg):
+    return Model(cfg) 

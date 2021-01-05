@@ -14,8 +14,11 @@ from vrd.utils.comm import synchronize, get_rank
 from vrd.utils.logger import setup_logger
 from vrd.utils.miscellaneous import mkdir, save_config
 
+torch.manual_seed(0)
+torch.cuda.manual_seed(0)
+
 def train(cfg, local_rank, distributed, output_dir):
-    model = build_model(cfg, is_train=True)
+    model = build_model(cfg)
     device = torch.device(cfg.MODEL.DEVICE)
     model.to(device)
     
@@ -27,6 +30,7 @@ def train(cfg, local_rank, distributed, output_dir):
     if distributed:
         model = torch.nn.parallel.DistributedDataParallel(
             model, device_ids=[local_rank], output_device=local_rank,
+            find_unused_parameters=True,
         )
 
     arguments = {"epoch": 1}
@@ -34,12 +38,13 @@ def train(cfg, local_rank, distributed, output_dir):
     checkpointer = Checkpointer(
         cfg, model, optimizer, scheduler, output_dir, save_to_disk
     )
-    if cfg.MODEL.WEIGHT == "":
-        extra_checkpoint_data = checkpointer.load(f=None, use_latest=True)
+    if cfg.MODEL.WEIGHTS:
+        extra_checkpoint_data = checkpointer.load(fs=cfg.MODEL.WEIGHTS, use_latest=False)
     else:
-        extra_checkpoint_data = checkpointer.load(f=cfg.MODEL.WEIGHT, use_latest=False)
-    arguments.update(extra_checkpoint_data)
+        extra_checkpoint_data = checkpointer.load(fs=None, use_latest=True)
     
+    arguments.update(extra_checkpoint_data)
+
     data_loader = make_data_loader(
         cfg,
         is_train=True,
@@ -54,7 +59,6 @@ def train(cfg, local_rank, distributed, output_dir):
 
     checkpoint_period = cfg.SOLVER.CHECKPOINT_PERIOD
 
-    
     do_train(
         cfg,
         model,
@@ -106,7 +110,7 @@ def main():
     output_dir = os.path.join("outputs", model_name)
     if output_dir:
         mkdir(output_dir)
-
+    
     logger = setup_logger("vrd", output_dir, get_rank())
     logger.info("Using {} GPUs".format(num_gpus))
     logger.info(args)

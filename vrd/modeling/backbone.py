@@ -9,18 +9,17 @@ class Identity(nn.Module):
         return x
 
 class Backbone(nn.Module):
-    def __init__(self, architecture, num_classes):
+    def __init__(self, architecture, num_classes, prior):
         super(Backbone, self).__init__()
         network = getattr(models, architecture)(pretrained=True)
         in_features = network.classifier._modules['6'].in_features
         network.classifier._modules['6'] = nn.Linear(in_features, num_classes)
+        bias = -torch.log((1 - prior) / prior)
+        network.classifier._modules['6'].bias.data = bias
         self.network = network
     
     def forward(self, x):
         return self.network(x)
 
-def build_backbone(cfg, num_classes):
-    architecture = cfg.MODEL.BACKBONE.ARCHITECTURE
-    num_classes = cfg.MODEL.NUM_CLASSES
-    backbone = Backbone(architecture, num_classes)
-    return backbone
+def build_backbone(architecture, num_classes, prior):
+    return Backbone(architecture, num_classes, prior)

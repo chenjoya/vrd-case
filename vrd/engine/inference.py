@@ -11,61 +11,36 @@ from ..utils.comm import all_gather
 from ..utils.comm import synchronize
 from ..utils.timer import Timer, get_time_str
 
+def recursive_to_device(batch, device):
+    if isinstance(batch, (list,tuple)):
+        batch = [recursive_to_device(b, device) for b in batch]
+        return batch
+    return batch.to(device)
+
 def compute_on_dataset(model, data_loader, device, timer):
     model.eval()
-    outputs, indicators, idxs = [], [], []
-    for images, targets, _idxs in tqdm(data_loader):
+    outputs = []
+    for batch in tqdm(data_loader):
         with torch.no_grad():
             timer.tic()
-            _outputs = model(images.to(device)) # no targets
+            batch = recursive_to_device(batch, device)
+            output = model(batch)
             torch.cuda.synchronize()
+            outputs.append(output)
             timer.toc()
-            outputs.append(_outputs)
-            idxs.append(_idxs.to(device))
-            indicators.append(targets['indicators'].to(device))
-    idxs = torch.cat(idxs)
-    indicators = torch.cat(indicators)
-    if isinstance(outputs[0], (list, tuple)): # has multiple returns
-        outputs = list(zip(*outputs))
-        outputs = [torch.cat(o) for o in outputs]
-    else: # is a tensor
-        outputs = [torch.cat(outputs)]
-    return outputs, indicators, idxs
+    outputs = list(zip(*outputs))
+    outputs = [o[0].extend_batch_eval(o) for o in outputs]
+    return outputs
 
-def split_by_indicators(predictions, indicators):
-    begin = 0
-    segments = []
-    for i in indicators:
-        end = begin + i.item()
-        segments.append(predictions[begin:end])
-        begin = end
-    return segments
-
-def _accumulate_predictions_from_multiple_gpus(predictions_per_gpu, indicators_per_gpu, idxs_per_gpu, length):
-    all_predictions = [all_gather(p) for p in predictions_per_gpu]
-    all_indicators = all_gather(indicators_per_gpu)
-    all_idxs = all_gather(idxs_per_gpu)
-    if not is_main_process():
-        return
-    if all_idxs.numel() != all_idxs.max() + 1:
-        logger = logging.getLogger("vrd.inference")
-        logger.warning(
-            "Number of images that were gathered from multiple processes is not "
-            "a contiguous set. Some images might be missing from the evaluation"
-        )
-        # may not size div
-        all_indicators = all_indicators[:length]
-        all_idxs = all_idxs[:length]
-        
-    all_predictions = [split_by_indicators(p, all_indicators) for p in all_predictions]
-    _, idxs = all_idxs.sort()
-    all_predictions = [[p[i].cpu() for i in idxs] for p in all_predictions]
-    return all_predictions
+def _accumulate_predictions_from_multiple_gpus(predictions_per_gpu):
+    predictions = [p.all_gather(all_gather) for p in predictions_per_gpu]
+    return predictions
 
 def inference(
         model,
         data_loader,
         dataset_name,
+        task,
         save_json_file,
         visualize_dir,
         device="cuda",
@@ -79,7 +54,7 @@ def inference(
     total_timer = Timer()
     inference_timer = Timer()
     total_timer.tic()
-    predictions, indicators, idxs = compute_on_dataset(model, data_loader, device, inference_timer)
+    predictions = compute_on_dataset(model, data_loader, device, inference_timer)
     # wait for all processes to complete before measuring the time
     synchronize()
     total_time = total_timer.toc()
@@ -98,11 +73,15 @@ def inference(
         )
     )
 
-    predictions = _accumulate_predictions_from_multiple_gpus(predictions, indicators, idxs, len(dataset))
+    predictions = _accumulate_predictions_from_multiple_gpus(predictions)
+
     if not is_main_process():
         return
 
-    return evaluate(dataset=dataset,
+    return evaluate(
+        dataset=dataset,
         predictions=predictions,
+        task=task,
         save_json_file=save_json_file,
-        visualize_dir=visualize_dir)
+        visualize_dir=visualize_dir
+    )
