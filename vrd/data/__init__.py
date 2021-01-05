@@ -21,8 +21,6 @@ def build_dataset(dataset_list, dataset_catalog, cfg, is_train):
         data = dataset_catalog.get(dataset_name)
         factory = getattr(D, data["factory"])
         args = data["args"]
-        args["task"] = cfg.TASK
-        args["input_size"] = cfg.INPUT.SIZE
         # make dataset from factory
         dataset = factory(**args)
         datasets.append(dataset)

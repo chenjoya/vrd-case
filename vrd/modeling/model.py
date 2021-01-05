@@ -145,9 +145,9 @@ class Model(nn.Module):
 
     def init_catreldet(self, cfg):
         self.detector = build_detector(cfg, cfg.MODEL.NUM_OBJ_CLASSES, bce_roi_heads=True)
-        hidden_channel = cfg.MODEL.HIDDEN_CHANNEL
+        hidden_channels = cfg.MODEL.HIDDEN_CHANNELS
 
-        self.encoder = build_encoder("resnet34", hidden_channel)
+        self.encoder = build_encoder("resnet34", hidden_channels)
 
         self.num_pred_classes = cfg.MODEL.NUM_PRED_CLASSES
         self.iou_floor = cfg.MODEL.IOU_FLOOR
@@ -165,21 +165,21 @@ class Model(nn.Module):
         self.bert_relations = torch.load("relations_without_comp.pth").cuda()
         
         self.unet = nn.Sequential(
-            nn.Linear(hidden_channel*3, hidden_channel),
+            nn.Linear(hidden_channels*3, hidden_channels),
             nn.ReLU(inplace=True),
-            nn.Linear(hidden_channel, hidden_channel),
+            nn.Linear(hidden_channels, hidden_channels),
             nn.ReLU(inplace=True),
         )
 
         self.rnet = nn.Sequential(
-            nn.Linear(hidden_channel*2, hidden_channel),
+            nn.Linear(hidden_channels*2, hidden_channels),
             nn.ReLU(inplace=True),
-            nn.Linear(hidden_channel, hidden_channel),
+            nn.Linear(hidden_channels, hidden_channels),
             nn.ReLU(inplace=True),
         )
 
         priors = json.load(open("priors.json"))
-        self.rfc = nn.Linear(hidden_channel, cfg.MODEL.NUM_PRED_CLASSES)
+        self.rfc = nn.Linear(hidden_channels, cfg.MODEL.NUM_PRED_CLASSES)
         prior = torch.tensor(priors['all_predcls'])
         self.rfc.bias.data = -torch.log((1 - prior) / prior)
 
@@ -190,110 +190,6 @@ class Model(nn.Module):
         task = cfg.TASK
         getattr(self, "init_" + task.lower())(cfg)
         self.task = task
-    
-    def forward_predcls_ranking(self, batch):
-        images, _, gt_relationships = batch
-        
-        bimages, uimages = [], []
-        for image, bboxes, ubboxes in \
-            zip(images, gt_relationships.bboxes, gt_relationships.ubboxes):
-            if len(bboxes) > 0:
-                bimages.append(
-                    torch.stack(
-                        [self.transform(image[:, ymin:ymax, xmin:xmax]) 
-                        for ymin, ymax, xmin, xmax in bboxes]
-                    )
-                )
-            if len(ubboxes) > 0:
-                uimages.append(
-                    torch.stack(
-                        [self.transform(image[:, ymin:ymax, xmin:xmax]) 
-                        for ymin, ymax, xmin, xmax in ubboxes]
-                    )
-                )
-        
-        with torch.no_grad():
-            if self.objcls_net.training:
-                self.objcls_net.eval()
-            bprobs = self.objcls_net(torch.cat(bimages)).sigmoid()
-            blens = [len(b) for b in gt_relationships.bboxes]
-            all_bprobs = split(bprobs, blens)
-       
-        if len(uimages) > 0:
-            uprobs = self.predcls_net(torch.cat(uimages)).sigmoid()
-            ulens = [len(b) for b in gt_relationships.ubboxes]
-            all_uprobs = split(uprobs, ulens)
-        else:
-            all_uprobs = [[] for _ in all_bprobs]
-
-        predictions, targets = [], []
-        relationships_50, relationships_100 = [], []
-
-        for idx, (bprobs, uprobs) in enumerate(zip(all_bprobs, all_uprobs)):
-            bboxes = gt_relationships.bboxes[idx]
-            ubboxes = gt_relationships.ubboxes[idx]
-            triplets = gt_relationships.triplets[idx]
-            image_idx = gt_relationships.idxs[idx]
-
-            if len(ubboxes) == 0:
-                continue
-            
-            sidxs, uidxs, oidxs = triplets[:,0], triplets[:,1], triplets[:,2]
-            unfold_umprobs = triplet_matmul(bprobs[sidxs], uprobs[uidxs], bprobs[oidxs])
-            
-            if self.training:
-                umprobs = torch.zeros(
-                    len(ubboxes), 
-                    self.num_obj_classes,
-                    self.num_pred_classes,
-                    self.num_obj_classes,
-                    device=uprobs.device
-                )
-                
-                for i, u in enumerate(uidxs):
-                    umprobs[u] += unfold_umprobs[i]
-
-                predictions.append(umprobs)
-                targets.append(gt_relationships.umasks[idx])
-            else:
-                unfold_sbboxes, unfold_ubboxes, unfold_obboxes =  \
-                     bboxes[sidxs], ubboxes[uidxs], bboxes[oidxs]
-
-                idxs_50, relations_50 = topk_relations(unfold_umprobs, K=50)
-                idxs_100, relations_100 = topk_relations(unfold_umprobs, K=100)
-
-                relationships_50.append(
-                    gt_relationships.create_eval(
-                        relations=relations_50, 
-                        sbboxes=unfold_sbboxes[idxs_50], 
-                        ubboxes=unfold_ubboxes[idxs_50], 
-                        obboxes=unfold_obboxes[idxs_50],
-                        idx=image_idx
-                    )
-                )
-                relationships_100.append(
-                    gt_relationships.create_eval(
-                        relations=relations_100, 
-                        sbboxes=unfold_sbboxes[idxs_100], 
-                        ubboxes=unfold_ubboxes[idxs_100], 
-                        obboxes=unfold_obboxes[idxs_100],
-                        idx=image_idx
-                    )
-                )
-
-        if self.training:
-            if len(predictions) > 0:
-                predcls_loss = torch.cat([
-                    1 - umprob[umask] + umprob[reverse(umask)].max() \
-                    for umprobs, umasks in zip(predictions, targets) \
-                    for umprob, umask in zip(umprobs, umasks)
-                ]).clamp(min=0).mean()
-            else:
-                predcls_loss = fake_loss(self.predcls_net)
-            return dict(predcls_loss=predcls_loss)
-
-        return relationships_50[0].extend_eval(relationships_50), \
-            relationships_100[0].extend_eval(relationships_100)
     
     def forward_preddet(self, batch):
         assert not self.training
@@ -463,19 +359,21 @@ class Model(nn.Module):
             pos_scats, pos_ocats = gt_scats, gt_ocats
             pos_sidxs, pos_oidxs = len(bboxes) + gt_sidxs, len(bboxes) + gt_oidxs
             bboxes = torch.cat([bboxes, gt_bboxes])
-
+        
         # produce negatives
         neg_mask = labels < 0
         if neg_mask.sum() > 0:
             num_neg = self.n2p * len(pos_ubboxes)
             neg_idxs = neg_mask.nonzero(as_tuple=False)
-            neg_idxs = neg_idxs[torch.randperm(neg_idxs.numel(), device=neg_idxs.device)[:num_neg]].squeeze()
+            print(neg_idxs.shape)
+            neg_idxs = neg_idxs[torch.randperm(neg_idxs.numel(), device=neg_idxs.device)[:num_neg]].squeeze(1)
             neg_ubboxes = ubboxes[neg_idxs]
             neg_upreds = torch.zeros(len(neg_ubboxes), device=neg_ubboxes.device) + self.num_pred_classes
-            neg_sbboxes, neg_obboxes = sbboxes[neg_idxs], obboxes[neg_idxs]
+            neg_sbboxes, neg_obboxes = sbboxes[neg_idxs], obboxes[neg_idxs].view
             neg_scats, neg_ocats = scats[neg_idxs], ocats[neg_idxs]
             neg_sidxs, neg_oidxs = sidxs[neg_idxs], oidxs[neg_idxs]
 
+        
         ubboxes = torch.cat([pos_ubboxes, neg_ubboxes])
         upreds = torch.cat([pos_upreds, neg_upreds])
         sbboxes, obboxes = torch.cat([pos_sbboxes, neg_sbboxes]), \
@@ -636,10 +534,10 @@ class Model(nn.Module):
     def detect(self, images):
         with torch.no_grad():
             self.detector.eval()
-            all_bboxes, all_bcats, _ = self.detector(images)
-        return all_bboxes, all_bcats
-
-    def generate(self, bboxes, bcats):
+            all_bboxes, all_bcats, all_scores = self.detector(images)
+        return all_bboxes, all_bcats, all_scores
+    
+    def generate(self, bboxes, bcats, bscores):
         sbboxes, sidxs, ubboxes, obboxes, oidxs = pairwise_ubboxes(bboxes)
         bboxes = bboxes[:max(sidxs.max(), oidxs.max())+1]
         scats, ocats = bcats[sidxs], bcats[oidxs]
@@ -671,12 +569,12 @@ class Model(nn.Module):
         if self.training:
             rtype = (torch.rand(1) * 2).int().item()
         else:
-            rtype = 0
+            rtype = 1
         rmask = self.masks[rtype]
-        #rmask[:] =1
         bert_relations = rmask.view(1,-1,1,1) * self.bert_relations
+        #bert_relations = self.bert_relations
 
-        all_bboxes, all_bcats = self.detect(images)
+        all_bboxes, all_bcats, all_bscores = self.detect(images)
 
         all_ubboxes, all_gt_upreds = [], []
         all_sbboxes, all_obboxes = [], []
@@ -685,11 +583,11 @@ class Model(nn.Module):
         all_uinvs, all_binvs = [], []
         all_unique_bimages, all_unique_uimages = [], []
 
-        for idx, (image, bboxes, bcats) in \
-            enumerate(zip(images, all_bboxes, all_bcats)):
+        for idx, (image, bboxes, bcats, bscores) in \
+            enumerate(zip(images, all_bboxes, all_bcats, all_bscores)):
             
             bboxes, sbboxes, scats, sidxs, ubboxes, obboxes, ocats, oidxs = \
-                self.generate(bboxes, bcats)
+                self.generate(bboxes, bcats, bscores)
 
             if self.training:
                 gt_bboxes = gt_relationships.bboxes[idx]
@@ -709,7 +607,7 @@ class Model(nn.Module):
                     bboxes, sbboxes, scats, sidxs, ubboxes, obboxes, ocats, oidxs,
                     gt_bboxes, gt_sbboxes, gt_scats, gt_sidxs, gt_ubboxes, gt_upreds, gt_obboxes, gt_ocats, gt_oidxs
                 )
-
+                
                 assert len(sbboxes) == len(scats) == len(ubboxes) == len(upreds) == len(obboxes) == len(ocats)
                 all_gt_upreds.append(upreds)
             
@@ -786,7 +684,7 @@ class Model(nn.Module):
 
                 assert len(scats) == len(uprobs) == len(ocats) == len(sbboxes) == len(ubboxes) == len(obboxes)
                 
-                idxs_25, upreds_25 = topk_relations(uprobs, 25)
+                idxs_25, upreds_25 = topk_relations(uprobs, 10)
                 idxs_50, upreds_50 = topk_relations(uprobs, 50)
                 idxs_100, upreds_100 = topk_relations(uprobs, 100)
                 

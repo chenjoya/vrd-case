@@ -53,14 +53,14 @@ def main():
     model = build_model(cfg)
     model.to(cfg.MODEL.DEVICE)
 
-    weight_files =  cfg.MODEL.WEIGHTS
-    assert len(weight_files) > 0
+    weight_file =  cfg.MODEL.WEIGHT
+    assert len(weight_file) > 0
 
     basename = os.path.basename(args.config_file)
     basename = os.path.splitext(basename)[0]
     output_dir = os.path.join("outputs/", basename)
     checkpointer = Checkpointer(cfg, model, save_dir=output_dir)
-    _ = checkpointer.load(fs=weight_files, use_latest=False)
+    _ = checkpointer.load(f=weight_file, use_latest=False)
     
     output_folders = [None] * len(cfg.DATASETS.TEST)
     dataset_names = cfg.DATASETS.TEST

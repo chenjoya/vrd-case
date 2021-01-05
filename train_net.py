@@ -38,10 +38,10 @@ def train(cfg, local_rank, distributed, output_dir):
     checkpointer = Checkpointer(
         cfg, model, optimizer, scheduler, output_dir, save_to_disk
     )
-    if cfg.MODEL.WEIGHTS:
-        extra_checkpoint_data = checkpointer.load(fs=cfg.MODEL.WEIGHTS, use_latest=False)
+    if cfg.MODEL.WEIGHT:
+        extra_checkpoint_data = checkpointer.load(f=cfg.MODEL.WEIGHT, use_latest=False)
     else:
-        extra_checkpoint_data = checkpointer.load(fs=None, use_latest=True)
+        extra_checkpoint_data = checkpointer.load(f=None, use_latest=True)
     
     arguments.update(extra_checkpoint_data)
 

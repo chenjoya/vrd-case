@@ -12,7 +12,6 @@ def union_bbox(a, b):
     return [min(a[0], b[0]), max(a[1], b[1]), min(a[2], b[2]), max(a[3], b[3])]
 
 from transformers import AutoTokenizer, AutoModel
-
 class Embedder(object):
     def __init__(self, arch):
         self.tokenizer = AutoTokenizer.from_pretrained(arch)
@@ -30,17 +29,16 @@ class Embedder(object):
             self.__call__(b)
         )
 
-class Instances(object): # describe instances in an image
+# describe instances in an image
+class Instances(object): 
     def __init__(self, num_classes=None):
         self.num_classes = num_classes
-        self.bboxes = [] # num_bboxes x 4
+        self.bboxes = []
         self.bcats = [] 
     
     def append(self, bbox, category):
-        #if bbox not in self.bboxes:
         self.bboxes.append(bbox)
         self.bcats.append(category)
-        #self.bcats[self.bboxes.index(bbox)][category] = 1
     
     def tensor(self, idx):
         instances = Instances()
@@ -62,7 +60,8 @@ class Instances(object): # describe instances in an image
         instances.bcats = [bcats.to(device) for bcats in self.bcats]
         instances.idxs = [idx.to(device) for idx in self.idxs]
         return instances
-    
+
+# describe relationships in an image
 class Relationships(object):
     def __init__(self, predicates, bboxes=None):
         self.bboxes = bboxes
@@ -83,12 +82,13 @@ class Relationships(object):
         self.relations = []
         self.triplets = []
 
-        self.num_obj_classes = 100
+        self.num_obj_classes = len(VR.CATEGORIES)
 
     def append(self, sbbox, scat, upred, obbox, ocat):
-        if VR.PREDICATES[upred] not in self.predicates:
+        if VR.PREDICATES_70[upred] not in self.predicates:
             return
-        upred = self.predicates.index(VR.PREDICATES[upred])
+        upred = self.predicates.index(VR.PREDICATES_70[upred])
+        self.upreds.append(upred)
         
         self.ubboxes.append(union_bbox(sbbox, obbox))
         self.sbboxes.append(sbbox)
@@ -96,7 +96,6 @@ class Relationships(object):
         self.obboxes.append(obbox)
         self.oidxs.append(self.bboxes.index(obbox))
         
-        self.upreds.append(upred)
         self.scats.append(scat)
         self.ocats.append(ocat)
         self.relations.append((scat, upred, ocat))
@@ -243,7 +242,7 @@ class Relationships(object):
             [], [], [], []
         for relation, sbbox, ubbox, obbox in \
             zip(self.relations, self.sbboxes, self.ubboxes, self.obboxes):
-            if VR.PREDICATES[relation[1]] in VR.TYPES[t]:
+            if VR.MASKS[t, relation[1]]:
                 relations.append(relation) 
                 sbboxes.append(sbbox) 
                 ubboxes.append(ubbox) 
@@ -262,7 +261,7 @@ class VR(torch.utils.data.Dataset):
         "cart", "skis", "pot", "surfboard", "paper", "mouse", "trash can", "cone", "camera", "ball", "bear", "giraffe", 
         "tie", "luggage", "faucet", "hydrant", "snowboard", "oven", "engine", "watch", "face", "street", "ramp", "suitcase"
     ]
-    PREDICATES = [
+    PREDICATES_70 = [
         "on", "wear", "has", "next to", "sleep next to", "sit next to", "stand next to", 
         "park next", "walk next to", "above", "behind", "stand behind", "sit behind", "park behind", 
         "in the front of", "under", "stand under", "sit under", "near", "walk to", "walk", "walk past", 
@@ -272,7 +271,7 @@ class VR(torch.utils.data.Dataset):
         "drive", "drive on", "taller than", "eat", "park on", "lying on", "pull", "talk", "lean on", "fly", 
         "face", "play with", "sleep on", "outside of", "rest on", "follow", "hit", "feed", "kick", "skate on"
     ]
-    PREDICATES_WITHOUT_COMP = [
+    PREDICATES_69 = [
         "on", "wear", "has", "next to", "sleep next to", "sit next to", "stand next to", 
         "park next", "walk next to", "above", "behind", "stand behind", "sit behind", "park behind", 
         "in the front of", "under", "stand under", "sit under", "near", "walk to", "walk", "walk past", 
@@ -289,34 +288,22 @@ class VR(torch.utils.data.Dataset):
         "park behind", "stand under", "sit under", "sit on", "carry", "look", "stand on", "use", "attach to", 
         "cover", "watch", "contain", "park on", "lying on", "lean on", "face", "sleep on", "rest on"
     ]
-    SPATPRE = [
-        "next to", "above", "behind", "in the front of", "under", "near",
-        "below", "beside", "beneath", "on the top of", "on the left of",
-        "on the right of", "inside", "adjacent to", "outside of", "on",
-        "in", "over", "by", "with", "at", "against", "across"
-    ]
 
-    mask1 = torch.zeros(69, dtype=torch.bool)
+    mask = torch.zeros(len(PREDICATES_69), dtype=torch.bool)
     for s in SELECTED:
-        mask1[PREDICATES_WITHOUT_COMP.index(s)] = True
-    mask2 = torch.zeros(69, dtype=torch.bool)
-    for s in SPATPRE:
-        mask2[PREDICATES_WITHOUT_COMP.index(s)] = True
-    
-    MASKS = torch.stack([mask1, mask2])
-    TYPES = [SELECTED, SPATPRE]
-    TYPE_NAMES = ["Action & Verb", 'Spatial & Preposition']
+        mask[PREDICATES_69.index(s)] = True
+    MASKS = torch.stack([mask, ~mask])
+    TYPES = ["Action & Verb", 'Spatial & Preposition']
 
-    def __init__(self, image_dir, anno_file, input_size, is_selected, task):
+    def __init__(self, image_dir, anno_file, is_selected):
         annos = json.load(open(anno_file))
-        self.input_size = input_size
 
         num_categories = len(self.CATEGORIES)
         
         if is_selected:
             predicates = self.SELECTED
         else:
-            predicates = self.PREDICATES_WITHOUT_COMP
+            predicates = self.PREDICATES_69
 
         image_names, instances, relationships = [], [], []
         for image_name, annos_per_image in annos.items():
@@ -336,37 +323,48 @@ class VR(torch.utils.data.Dataset):
             image_names.append(image_name)
             instances.append(instances_per_image)
             relationships.append(relationships_per_image)
-
+        
+        self.image_names = image_names
         self.image_files = [join(image_dir, n) for n in image_names]
         self.instances = instances
         self.relationships = relationships
         self.transform = transforms.Compose([
             transforms.ToTensor(),
         ])
-        self.task = task
         
-        # embedder = Embedder("bert-base-uncased")
-
     def __getitem__(self, idx):
         image = cv2.imread(self.image_files[idx])
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB) 
+
         instances = self.instances[idx]
         relationships = self.relationships[idx]
+        
         image = self.transform(image)
         return image, instances.tensor(idx), relationships.tensor(idx)
 
     def __len__(self):
         return len(self.image_files)
     
-    def visualize(self, image, bboxes, ubboxes, categories, triplets):
-        bbox_images = [image[ymin:ymax, xmin:xmax] for ymin, ymax, xmin, xmax in bboxes]
-        ubbox_images = [image[ymin:ymax, xmin:xmax] for ymin, ymax, xmin, xmax in ubboxes]
+    def visualize(self, sbboxes, scats, ubboxes, upreds, obboxes, ocats, idx):
+        colors = {'red': (0,0,255), 'blue': (255,0,0), 'green': (0,255,0)}
 
-        for i, (ubbox_image, triplet) in enumerate(zip(ubbox_images, triplets)): 
-            #H, W, _ = bbox_image.shape
-            print(ubbox_image.shape)
-            subject_index, predicate, object_index = triplet
-            subject_category, object_category = categories[subject_index], categories[object_index]
-            # see = cv2.putText(bbox_image, self.CATEGORIES[category], (W // 2, H // 2), cv2.FONT_HERSHEY_SIMPLEX, 1, (255,255,255))
-            print(self.CATEGORIES[subject_category], self.SELECTED[predicate], self.CATEGORIES[object_category])
-            cv2.imwrite(str(i) + ".jpg", ubbox_image)
+        def draw(dimage, bbox, string, color, pos='down'):
+            ymin, ymax, xmin, xmax = bbox
+            dimage = cv2.rectangle(dimage, (xmin, ymin), (xmax, ymax), colors[color], 2)
+            
+            # draw background
+            if pos == 'down':
+                dimage = cv2.rectangle(dimage, (xmax-100, ymin+2), (xmax-2, ymin+48), (255,255,255), thickness=-1)
+                cv2.putText(dimage, string, (xmax-100, ymin+25),cv2.FONT_HERSHEY_COMPLEX,0.8,(0,0,0),2)
+            else:
+                dimage = cv2.rectangle(dimage, (xmin+2, ymin+2), (xmin + 270, ymin+50), (255,255,255), thickness=-1)
+                cv2.putText(dimage, string, (xmin+2, ymin+25),cv2.FONT_HERSHEY_COMPLEX,0.8,(0,0,0),2)
+            return dimage
+
+        for i, (sbbox, scat, ubbox, upred, obbox, ocat) in enumerate(zip(sbboxes, scats, ubboxes, upreds, obboxes, ocats)): 
+            image = cv2.imread(self.image_files[idx])
+            dimage = draw(image, sbbox, VR.CATEGORIES[scat], 'red')
+            dimage = draw(dimage, ubbox, VR.CATEGORIES[scat] + '-' + VR.PREDICATES_69[upred] + '-' + VR.CATEGORIES[ocat], 'blue', pos='up')
+            dimage = draw(dimage, obbox, VR.CATEGORIES[ocat], 'green')
+            cv2.imwrite(f'{self.image_names[idx]}_{i}.jpg', dimage)
+        

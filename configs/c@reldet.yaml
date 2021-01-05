@@ -1,13 +1,14 @@
 TASK: "CatRelDet"
 MODEL:
-  WEIGHTS: ("outputs/c@reldet/model_10e.pth",)
+  WEIGHT: "outputs/objdet_best/model_8e.pth"
   NUM_OBJ_CLASSES: 100
   NUM_PRED_CLASSES: 69
   IOU_FLOOR: 0.5
-  N2P: 3
+  N2P: 1
+  HIDDEN_CHANNELS: 768
   DETECTOR:
     SCORE_THRESH: 0.01
-    NUM_DETECTIONS: 12
+    NUM_DETECTIONS: 15
 DATASETS:
   TRAIN: ("vr_train",)
   TEST: ("vr_test",)
@@ -15,9 +16,9 @@ SOLVER:
   BATCH_SIZE: 36
   LR: 0.1
   GAMMA: 0.1
-  MILESTONES: (6, 8)
-  MAX_EPOCH: 10
+  MILESTONES: (4, 7)
+  MAX_EPOCH: 8
   TEST_PERIOD: 1
   CHECKPOINT_PERIOD: 1
 TEST:
-  BATCH_SIZE: 12
+  BATCH_SIZE: 32

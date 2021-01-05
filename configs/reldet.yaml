@@ -1,6 +1,6 @@
 TASK: "RelDet"
 MODEL:
-  WEIGHTS: ("outputs/objdet_best/model_8e.pth",)
+  WEIGHTS: "outputs/objdet_best/model_8e.pth"
   NUM_OBJ_CLASSES: 100
   NUM_PRED_CLASSES: 46
   IOU_FLOOR: 0.5
@@ -17,8 +17,8 @@ SOLVER:
   BATCH_SIZE: 32
   LR: 0.02
   GAMMA: 0.1
-  MILESTONES: (2, 4)
-  MAX_EPOCH: 5
+  MILESTONES: (4, 7)
+  MAX_EPOCH: 8
   TEST_PERIOD: 1
   CHECKPOINT_PERIOD: 1
 TEST:

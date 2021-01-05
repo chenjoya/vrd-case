@@ -1,0 +1,13 @@
+TASK: "CatRelDet"
+MODEL:
+  WEIGHT: "outputs/c@reldet_best/model_10e.pth"
+  NUM_OBJ_CLASSES: 100
+  NUM_PRED_CLASSES: 69
+  HIDDEN_CHANNELS: 768
+  DETECTOR:
+    SCORE_THRESH: 0.01
+    NUM_DETECTIONS: 15
+DATASETS:
+  TEST: ("vr_visualize",)
+TEST:
+  BATCH_SIZE: 2

@@ -14,6 +14,11 @@ class DatasetCatalog(object):
             "anno_file": "vr/annotations/annotations_test.json",
             "is_selected": False,
         },
+        "vr_visualize":{
+            "image_dir": "vr/sg_test_images",    
+            "anno_file": "vr/annotations/annotations_visualize.json",
+            "is_selected": False,
+        },
         "vrs_train":{
             "image_dir": "vr/sg_train_images",    
             "anno_file": "vr/annotations/annotations_train.json",
@@ -24,7 +29,11 @@ class DatasetCatalog(object):
             "anno_file": "vr/annotations/annotations_test.json",
             "is_selected": True,
         },
-        
+        "vrs_visualize":{
+            "image_dir": "vr/sg_test_images",    
+            "anno_file": "vr/annotations/annotations_visualize.json",
+            "is_selected": True,
+        },
     }
 
     @staticmethod

@@ -1,8 +1,8 @@
-config_file="configs/debug.yaml"
+config_file="configs/visualize.yaml"
 
-gpus=4,5,6,7
-gpun=4
-master_port=29501
+gpus=1
+gpun=1
+master_port=29503
 
 # ------------------------ need not change -----------------------------------
 CUDA_VISIBLE_DEVICES=$gpus python -m torch.distributed.launch --nproc_per_node=$gpun --master_port $master_port \

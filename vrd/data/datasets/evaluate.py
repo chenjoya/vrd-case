@@ -11,6 +11,9 @@ from torch.functional import F
 
 from .vr import VR
 
+def visualize(image_name):
+    pass
+
 # VR bounding box format is [ymin, ymax, xmin, xmax]
 def iou(a, b):
     ymin = max(a[0], b[0])
@@ -124,13 +127,25 @@ def evaluate(dataset, predictions, task, save_json_file="", visualize_dir=""):
         phr_25, rel_25, count = evaluate_relationships(relationships_25, gt_relationships, t)
         phr_50, rel_50, count = evaluate_relationships(relationships_50, gt_relationships, t)
         phr_100, rel_100, count = evaluate_relationships(relationships_100, gt_relationships, t)
-        logger.info(f"Type: {VR.TYPE_NAMES[t]}, Overall count: {count}, {inform('PhrDet Recall', (phr_25, phr_50, phr_100), Ks=(25, 50, 100))}, {inform('RelDet Recall', (rel_25, rel_50, rel_100), Ks=(25, 50, 100))}")
+        logger.info(f"Type: {VR.TYPES[t]}, Overall count: {count}, {inform('PhrDet Recall', (phr_25, phr_50, phr_100), Ks=(25, 50, 100))}, {inform('RelDet Recall', (rel_25, rel_50, rel_100), Ks=(25, 50, 100))}")
 
     phr_25, rel_25, count = evaluate_relationships(relationships_25, gt_relationships)
     phr_50, rel_50, count = evaluate_relationships(relationships_50, gt_relationships)
     phr_100, rel_100, count = evaluate_relationships(relationships_100, gt_relationships)
     logger.info(f"Type: All, Overall count: {count}, {inform('PhrDet Recall', (phr_25, phr_50, phr_100), Ks=(25, 50, 100))}, {inform('RelDet Recall', (rel_25, rel_50, rel_100), Ks=(25, 50, 100))}")
+    if len(dataset) > 2:
+        return    
 
+    for i in range(len(dataset)):
+        relations = relationships_25.relations
+        sbboxes, ubboxes, obboxes = relationships_25.sbboxes, relationships_25.ubboxes, relationships_25.obboxes
+        lens = relationships_25.lens
+        idxs = relationships_25.idxs
+        relations, sbboxes, ubboxes, obboxes = split(
+            (relations, sbboxes, ubboxes, obboxes), 
+            lens
+        )
+        dataset.visualize(sbboxes[i], relations[i][:, 0], ubboxes[i], relations[i][:, 1], obboxes[i], relations[i][:, 2], idxs[i])
 
     
     
