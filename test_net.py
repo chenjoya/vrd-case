@@ -54,7 +54,6 @@ def main():
     model.to(cfg.MODEL.DEVICE)
 
     weight_file =  cfg.MODEL.WEIGHT
-    assert len(weight_file) > 0
 
     basename = os.path.basename(args.config_file)
     basename = os.path.splitext(basename)[0]
@@ -71,14 +70,12 @@ def main():
             output_folders[idx] = output_folder
     data_loaders_val = make_data_loader(cfg, is_train=False, is_distributed=distributed)
     
-    for output_folder, dataset_name, data_loader_val in zip(output_folders, dataset_names, data_loaders_val):
+    for output_folder, data_loader_val in zip(output_folders, data_loaders_val):
         inference(
             model,
             data_loader_val,
-            dataset_name=dataset_name,
             task=cfg.TASK,
-            save_json_file="",
-            visualize_dir="",
+            visualize_dir=output_folder,
             device=cfg.MODEL.DEVICE,
         )
         synchronize()

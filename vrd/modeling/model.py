@@ -5,26 +5,16 @@ from torch import nn
 from torch.functional import F
 from torchvision import models
 from torchvision import transforms
-from torchvision.ops import box_iou
+
 
 from .backbone import build_backbone
 from .detector import build_detector
 from .encoder import build_encoder
+from .tasks import ObjCls
 
-def triplet_matmul(a, b, c):
-    batch = a.shape[0]
-    ab = torch.matmul(a.unsqueeze(2), b.unsqueeze(1))
-    abc = torch.matmul(ab.view(batch, -1).unsqueeze(2), c.unsqueeze(1))
-    return abc.view(batch, a.shape[1], b.shape[1], c.shape[1])
 
-def fake_loss(network):
-    # we produce a fake loss
-    fake_images = torch.zeros(1, 3, 224, 224).cuda()
-    fake_loss = network(fake_images).sum() * 0
-    return fake_loss
 
-def union_bbox(a, b):
-    return [min(a[0], b[0]), max(a[1], b[1]), min(a[2], b[2]), max(a[3], b[3])]
+
 
 def pack(lss):
     return [ls for ls in lss if len(ls) > 0]
@@ -38,30 +28,6 @@ def split(ds, lengths):
         begin = end
     return segments
 
-def pairwise_ubboxes(bboxes):
-    # bboxes: tensor, N x 4
-    eye = torch.eye(
-        len(bboxes), 
-        device=bboxes.device, 
-        dtype=torch.bool
-    )
-    sidxs, oidxs = torch.nonzero(
-        ~eye,
-        as_tuple=True
-    )
-    sbboxes = bboxes[sidxs]
-    obboxes = bboxes[oidxs]
-    # union bboxes
-    ubboxes = torch.stack(
-        [
-            torch.min(sbboxes[:, 0], obboxes[:, 0]),
-            torch.max(sbboxes[:, 1], obboxes[:, 1]),
-            torch.min(sbboxes[:, 2], obboxes[:, 2]),
-            torch.max(sbboxes[:, 3], obboxes[:, 3])
-        ],
-        dim=1
-    )
-    return sbboxes, sidxs, ubboxes, obboxes, oidxs
 
 def topk_relations(probs, K):
     masks = torch.zeros_like(probs, 
@@ -82,66 +48,6 @@ def reverse(mask):
 
 class Model(nn.Module):
     
-    def init_objcls(self, cfg):
-        prior = torch.tensor(json.load(open("priors.json"))['objcls'])
-        self.objcls_net = build_backbone(cfg.MODEL.BACKBONE.ARCHITECTURE, 
-            cfg.MODEL.NUM_OBJ_CLASSES, prior)
-        self.num_obj_classes = cfg.MODEL.NUM_OBJ_CLASSES
-        self.transform = transforms.Compose([
-            transforms.Resize(cfg.INPUT.SIZE),
-            transforms.Normalize(
-                mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
-            ),
-        ])
-
-    def init_predcls(self, cfg):
-        self.init_objcls(cfg)
-        priors = json.load(open("priors.json"))
-        prior = torch.tensor(priors['predcls'])
-        self.predcls_net = build_backbone(
-            cfg.MODEL.BACKBONE.ARCHITECTURE, 
-            cfg.MODEL.NUM_PRED_CLASSES, 
-            prior
-        )
-        self.num_pred_classes = cfg.MODEL.NUM_PRED_CLASSES
-        self.transform = transforms.Compose([
-            transforms.Resize(cfg.INPUT.SIZE),
-            transforms.Normalize(
-                mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
-            ),
-        ])
-
-    def init_preddet(self, cfg):
-        self.init_objcls(cfg)
-        self.init_predcls(cfg)
-        self.detector = build_detector(cfg, self.num_obj_classes)
-    
-    def init_objdet(self, cfg):
-        self.init_predcls(cfg)
-        self.detector = build_detector(cfg, cfg.MODEL.NUM_OBJ_CLASSES, bce_roi_heads=True)
-        self.num_obj_classes = cfg.MODEL.NUM_OBJ_CLASSES
-        self.num_pred_classes = cfg.MODEL.NUM_PRED_CLASSES
-
-    def init_reldet(self, cfg):
-        self.detector = build_detector(cfg, cfg.MODEL.NUM_OBJ_CLASSES, bce_roi_heads=True)
-        self.num_obj_classes = cfg.MODEL.NUM_OBJ_CLASSES
-        self.num_pred_classes = cfg.MODEL.NUM_PRED_CLASSES
-        self.iou_floor = cfg.MODEL.IOU_FLOOR
-        self.n2p = cfg.MODEL.N2P
-
-        priors = json.load(open("priors.json"))
-        prior = torch.tensor(priors['predcls'])
-        self.relcls_net = build_backbone(
-            cfg.MODEL.BACKBONE.ARCHITECTURE, 
-            cfg.MODEL.NUM_PRED_CLASSES, 
-            prior
-        )
-        self.transform = transforms.Compose([
-            transforms.Resize(cfg.INPUT.SIZE),
-            transforms.Normalize(
-                mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
-            ),
-        ])
 
     def init_catreldet(self, cfg):
         self.detector = build_detector(cfg, cfg.MODEL.NUM_OBJ_CLASSES, bce_roi_heads=True)
@@ -185,135 +91,7 @@ class Model(nn.Module):
 
         self.num_obj_classes = cfg.MODEL.NUM_OBJ_CLASSES
     
-    def __init__(self, cfg):
-        super(Model, self).__init__()
-        task = cfg.TASK
-        getattr(self, "init_" + task.lower())(cfg)
-        self.task = task
     
-    def forward_preddet(self, batch):
-        assert not self.training
-        images, _, gt_relationships = batch
-        
-        all_bboxes, _ = self.detector(images)
-
-        relationships_50, relationships_100 = [], []
-        for image, bboxes, image_idx in \
-            zip(images, all_bboxes, gt_relationships.idxs):
-
-            bboxes = bboxes
-            if len(bboxes) < 2:
-                continue
-            
-            ubboxes, triplets = pairwise_ubboxes(bboxes)
-            triplets = triplets[:100]
-            sidxs, uidxs, oidxs = triplets[:,0], triplets[:,1], triplets[:,2]
-            # cut image to improve speed
-            ubboxes = ubboxes[:uidxs.max()+1]
-            
-            bimages = torch.stack(
-                [self.transform(image[:, ymin:ymax, xmin:xmax]) 
-                for ymin, ymax, xmin, xmax in bboxes]
-            )
-            uimages = torch.stack(
-                [self.transform(image[:, ymin:ymax, xmin:xmax]) 
-                for ymin, ymax, xmin, xmax in ubboxes]
-            )
-            
-            bprobs = self.objcls_net(bimages).sigmoid()
-            uprobs = self.predcls_net(uimages).sigmoid()
-            
-            sidxs, uidxs, oidxs = triplets[:,0], triplets[:,1], triplets[:,2]
-            
-            umprobs = triplet_matmul(bprobs[sidxs], uprobs[uidxs], bprobs[oidxs])
-            
-            idxs_50, relations_50 = topk_relations(umprobs, K=50)
-            idxs_100, relations_100 = topk_relations(umprobs, K=100)
-
-            sbboxes, ubboxes, obboxes = bboxes[sidxs], ubboxes[uidxs], bboxes[oidxs]
-            
-            relationships_50.append(
-                gt_relationships.create_eval(
-                    relations=relations_50, 
-                    sbboxes=sbboxes[idxs_50], 
-                    ubboxes=ubboxes[idxs_50], 
-                    obboxes=obboxes[idxs_50],
-                    idx=image_idx
-                )
-            )
-            relationships_100.append(
-                gt_relationships.create_eval(
-                    relations=relations_100, 
-                    sbboxes=sbboxes[idxs_100], 
-                    ubboxes=ubboxes[idxs_100], 
-                    obboxes=obboxes[idxs_100],
-                    idx=image_idx
-                )
-            )
-
-        return relationships_50[0].extend_eval(relationships_50), \
-            relationships_100[0].extend_eval(relationships_100)
-
-    def forward_objdet(self, batch):
-        images, gt_instances, gt_relationships = batch
-        
-        if self.predcls_net.training:
-            self.predcls_net.eval()
-
-        if self.training:
-            return self.detector(images, gt_instances.bboxes, gt_instances.bcats)
-        
-        all_bboxes, all_probs = self.detector(images)
-        
-        relationships_50, relationships_100 = [], []
-        for image, bboxes, bprobs, image_idx in \
-            zip(images, all_bboxes, all_probs, gt_relationships.idxs):
-
-            if len(bboxes) < 2: 
-                continue
-            
-            ubboxes, triplets = pairwise_ubboxes(bboxes)
-            # we only care R@100 and R@50
-            triplets = triplets[:150]
-            sidxs, uidxs, oidxs = triplets[:,0], triplets[:,1], triplets[:,2]
-            # cut image to improve speed
-            ubboxes = ubboxes[:uidxs.max()+1]
-            uimages = torch.stack(
-                [self.transform(image[:, ymin:ymax, xmin:xmax]) 
-                for ymin, ymax, xmin, xmax in ubboxes]
-            )
-            uprobs = self.predcls_net(uimages).sigmoid()
-
-            unfold_umprobs = triplet_matmul(bprobs[sidxs], uprobs[uidxs], bprobs[oidxs])
-            
-            idxs_50, relations_50 = topk_relations(unfold_umprobs, K=50)
-            idxs_100, relations_100 = topk_relations(unfold_umprobs, K=100)
-
-            unfold_sbboxes, unfold_ubboxes, unfold_obboxes = \
-                bboxes[sidxs], ubboxes[uidxs], bboxes[oidxs]
-
-            relationships_50.append(
-                gt_relationships.create_eval(
-                    relations=relations_50, 
-                    sbboxes=unfold_sbboxes[idxs_50], 
-                    ubboxes=unfold_ubboxes[idxs_50], 
-                    obboxes=unfold_obboxes[idxs_50],
-                    idx=image_idx
-                )
-            )
-
-            relationships_100.append(
-                gt_relationships.create_eval(
-                    relations=relations_100, 
-                    sbboxes=unfold_sbboxes[idxs_100], 
-                    ubboxes=unfold_ubboxes[idxs_100], 
-                    obboxes=unfold_obboxes[idxs_100],
-                    idx=image_idx
-                )
-            )
-        return relationships_50[0].extend_eval(relationships_50), \
-            relationships_100[0].extend_eval(relationships_100)
-        
     def match_and_sample(self, bboxes, sbboxes, scats, sidxs, ubboxes, obboxes, ocats, oidxs,
         gt_bboxes, gt_sbboxes, gt_scats, gt_sidxs, gt_ubboxes, gt_upreds, gt_obboxes, gt_ocats, gt_oidxs):
         # match strategy: 
@@ -531,12 +309,6 @@ class Model(nn.Module):
         return relationships_50[0].extend_eval(relationships_50), \
             relationships_100[0].extend_eval(relationships_100)
 
-    def detect(self, images):
-        with torch.no_grad():
-            self.detector.eval()
-            all_bboxes, all_bcats, all_scores = self.detector(images)
-        return all_bboxes, all_bcats, all_scores
-    
     def generate(self, bboxes, bcats, bscores):
         sbboxes, sidxs, ubboxes, obboxes, oidxs = pairwise_ubboxes(bboxes)
         bboxes = bboxes[:max(sidxs.max(), oidxs.max())+1]
@@ -659,7 +431,7 @@ class Model(nn.Module):
         sfeatures = torch.cat(sfeatures)
         ufeatures = torch.cat(ufeatures)
         ofeatures = torch.cat(ofeatures)
-
+        
         ufeatures = torch.cat([sfeatures,ufeatures,ofeatures], dim=1)
         ufeatures = self.unet(ufeatures)
         rfeatures = self.attention(ufeatures, bert_relations[scats,:,ocats])

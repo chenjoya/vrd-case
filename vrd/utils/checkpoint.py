@@ -51,7 +51,7 @@ class Checkpointer(object):
         goon = False
         if self.has_checkpoint() and use_latest:
             # override argument with existing checkpoint
-            f = (self.get_checkpoint_file(), )
+            f = self.get_checkpoint_file()
             # continue training
             goon = True
         

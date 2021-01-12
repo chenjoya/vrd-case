@@ -1,8 +1,6 @@
 TASK: "ObjCls"
 MODEL:
   NUM_OBJ_CLASSES: 100
-  BACKBONE:
-    ARCHITECTURE: "vgg16"
 DATASETS:
   TRAIN: ("vrs_train",)
   TEST: ("vrs_test",)

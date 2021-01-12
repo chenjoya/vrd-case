@@ -1,15 +1,11 @@
 TASK: "RelDet"
 MODEL:
-  WEIGHTS: "outputs/objdet_best/model_8e.pth"
+  WEIGHT: "outputs/objdet/model_8e.pth"
   NUM_OBJ_CLASSES: 100
   NUM_PRED_CLASSES: 46
-  IOU_FLOOR: 0.5
-  N2P: 3
-  BACKBONE:
-    ARCHITECTURE: "vgg16"
-  DETECTOR:
-    SCORE_THRESH: 0.01
-    NUM_DETECTIONS: 15
+  NUM_DETECTIONS: 15
+  NEG2POS: 3
+  NUM_PRED_SAMPLES: 30
 DATASETS:
   TRAIN: ("vrs_train",)
   TEST: ("vrs_test",)
@@ -22,4 +18,4 @@ SOLVER:
   TEST_PERIOD: 1
   CHECKPOINT_PERIOD: 1
 TEST:
-  BATCH_SIZE: 64
+  BATCH_SIZE: 32

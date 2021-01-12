@@ -1,10 +1,9 @@
-TASK: "PredDet"
+TASK: "PreDet"
 MODEL:
-  WEIGHTS: "outputs/predcls_best/model_8e.pth"
+  WEIGHT: "outputs/predcls/model_8e.pth"
   NUM_OBJ_CLASSES: 100
   NUM_PRED_CLASSES: 46
-  BACKBONE:
-    ARCHITECTURE: "vgg16"
+  NUM_DETECTIONS: 15
 DATASETS:
   TRAIN: ("vrs_train",)
   TEST: ("vrs_test",)
@@ -19,4 +18,4 @@ SOLVER:
   TEST_PERIOD: 1
   CHECKPOINT_PERIOD: 1
 TEST:
-  BATCH_SIZE: 64
+  BATCH_SIZE: 32

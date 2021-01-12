@@ -44,8 +44,10 @@ def all_gather(data):
     world_size = get_world_size()
     if world_size == 1:
         return data
-    batch = torch.tensor(data.shape[0], dtype=torch.long, device=data.device)
+    
+    batch = torch.tensor(len(data), dtype=torch.long, device=data.device)
     batches = [torch.tensor(0, dtype=torch.long, device=data.device) for _ in range(world_size)]
+    
     dist.all_gather(batches, batch)
     max_batch = max(batches).item()
     
@@ -60,7 +62,7 @@ def all_gather(data):
     dist.all_gather(datas, data)
 
     datas = [data[:batch] for batch, data in zip(batches, datas)]
-    return torch.cat(datas)
+    return datas
 
 def reduce_dict(input_dict, average=True):
     """
@@ -89,3 +91,10 @@ def reduce_dict(input_dict, average=True):
             values /= world_size
         reduced_dict = {k: v for k, v in zip(names, values)}
     return reduced_dict
+
+def reduce_sum(a):
+    if dist.get_world_size() > 0:
+        a = torch.tensor(a, device="cuda")
+        dist.all_reduce(a)
+        a = a.item()
+    return a

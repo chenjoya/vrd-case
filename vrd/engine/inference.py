@@ -11,37 +11,34 @@ from ..utils.comm import all_gather
 from ..utils.comm import synchronize
 from ..utils.timer import Timer, get_time_str
 
-def recursive_to_device(batch, device):
-    if isinstance(batch, (list,tuple)):
-        batch = [recursive_to_device(b, device) for b in batch]
-        return batch
-    return batch.to(device)
 
 def compute_on_dataset(model, data_loader, device, timer):
     model.eval()
     outputs = []
-    for batch in tqdm(data_loader):
+    for batches in tqdm(data_loader):
         with torch.no_grad():
             timer.tic()
-            batch = recursive_to_device(batch, device)
-            output = model(batch)
+            batches = [[b.to(device) for b in batch] for batch in batches]
+            output = model(batches)
             torch.cuda.synchronize()
             outputs.append(output)
             timer.toc()
     outputs = list(zip(*outputs))
-    outputs = [o[0].extend_batch_eval(o) for o in outputs]
+    # flatten
+    outputs = [sum(output, []) for output in outputs]
     return outputs
 
 def _accumulate_predictions_from_multiple_gpus(predictions_per_gpu):
-    predictions = [p.all_gather(all_gather) for p in predictions_per_gpu]
+    predictions = [[] for _ in predictions_per_gpu]
+    for item, prediction_per_gpu in enumerate(predictions_per_gpu):
+        for p in prediction_per_gpu:
+            predictions[item] += p.all_gather(all_gather)
     return predictions
 
 def inference(
         model,
         data_loader,
-        dataset_name,
         task,
-        save_json_file,
         visualize_dir,
         device="cuda",
     ):
@@ -50,7 +47,7 @@ def inference(
     num_devices = get_world_size()
     logger = logging.getLogger("vrd.inference")
     dataset = data_loader.dataset
-    logger.info("Start evaluation on {} dataset (Size: {}).".format(dataset_name, len(dataset)))
+    logger.info("Start evaluation on {} dataset (Size: {}).".format(dataset.__class__.__name__, len(dataset)))
     total_timer = Timer()
     inference_timer = Timer()
     total_timer.tic()
@@ -73,15 +70,16 @@ def inference(
         )
     )
 
-    predictions = _accumulate_predictions_from_multiple_gpus(predictions)
-
-    if not is_main_process():
-        return
-
-    return evaluate(
+    evaluate(
         dataset=dataset,
         predictions=predictions,
         task=task,
-        save_json_file=save_json_file,
         visualize_dir=visualize_dir
     )
+
+    # predictions = _accumulate_predictions_from_multiple_gpus(predictions)
+
+    #if not is_main_process():
+    #    return
+    
+    #return 

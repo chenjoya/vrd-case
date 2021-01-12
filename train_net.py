@@ -32,8 +32,8 @@ def train(cfg, local_rank, distributed, output_dir):
             model, device_ids=[local_rank], output_device=local_rank,
             find_unused_parameters=True,
         )
-
-    arguments = {"epoch": 1}
+    
+    arguments = {"epoch": 0}
     save_to_disk = get_rank() == 0
     checkpointer = Checkpointer(
         cfg, model, optimizer, scheduler, output_dir, save_to_disk

@@ -7,12 +7,12 @@ import zipfile
 import os
 
 import torch
+import torch.distributed as dist
 from torch.functional import F
+from torchvision.ops import box_iou
 
 from .vr import VR
-
-def visualize(image_name):
-    pass
+from vrd.utils.comm import reduce_sum
 
 # VR bounding box format is [ymin, ymax, xmin, xmax]
 def iou(a, b):
@@ -41,19 +41,19 @@ def inform(indicator, rates, Ks):
     infos = [f'{indicator}@{k}: {rate:.4f}' for rate, k in zip(rates, Ks)]
     return ', '.join(infos)
 
-def eval_phrdet(rs, ubs, gt_rs, gt_ubs):
+def eval_phrdet(pbboxes, rcats, gt_pbboxes, gt_rcats):
     phrdet = 0
-    gt_detected = torch.zeros(len(gt_rs), dtype=torch.bool)
+    gt_detected = torch.zeros(len(gt_pbboxes), dtype=torch.bool)
 
-    for r, ub in zip(rs, ubs):
+    iou_matrix = box_iou(pbboxes, gt_pbboxes)
+
+    for i, rcat in enumerate(rcats):
         iou_max, g_max = -1, -1
-        r, ub = r.tolist(), ub.tolist()
-        for g, (gt_r, gt_ub) in enumerate(zip(gt_rs, gt_ubs)):
-
-            if r != list(gt_r) or gt_detected[g]:
+        for g, gt_rcat in enumerate(gt_rcats):
+            if gt_detected[g] or not torch.equal(rcat, gt_rcat):
                 continue
             
-            u = iou(ub, gt_ub)
+            u = iou_matrix[i][g]
             if u >= 0.5 and u > iou_max:
                 iou_max, g_max = u, g
         
@@ -63,19 +63,20 @@ def eval_phrdet(rs, ubs, gt_rs, gt_ubs):
     
     return phrdet
 
-def eval_reldet(rs, sbs, obs, gt_rs, gt_sbs, gt_obs):
+def eval_reldet(sbboxes, rcats, obboxes, gt_sbboxes, gt_rcats, gt_obboxes):
     reldet = 0
-    gt_detected = torch.zeros(len(gt_rs), dtype=torch.bool)
+    gt_detected = torch.zeros(len(gt_rcats), dtype=torch.bool)
 
-    for r, sb, ob in zip(rs, sbs, obs):
+    siou_matrix = box_iou(sbboxes, gt_sbboxes)
+    oiou_matrix = box_iou(obboxes, gt_obboxes)
+
+    for i, rcat in enumerate(rcats):
         iou_max, g_max = -1, -1
-        r, sb, ob = r.tolist(), sb.tolist(), ob.tolist()
-        for g, (gt_r, gt_sb, gt_ob) in enumerate(zip(gt_rs, gt_sbs, gt_obs)):
-            
-            if r != list(gt_r) or gt_detected[g]:
+        for g, gt_rcat in enumerate(gt_rcats):
+            if gt_detected[g] or not torch.equal(rcat, gt_rcat):
                 continue
             
-            u = min(iou(sb, gt_sb), iou(ob, gt_ob))
+            u = min(siou_matrix[i][g], oiou_matrix[i][g])
             if u >= 0.5 and u > iou_max:
                 iou_max, g_max = u, g
         
@@ -85,68 +86,54 @@ def eval_reldet(rs, sbs, obs, gt_rs, gt_sbs, gt_obs):
     
     return reldet
 
-def evaluate_relationships(relationships, gt_relationships, typ=None):
-    relations = relationships.relations
-    sbboxes, ubboxes, obboxes = relationships.sbboxes, relationships.ubboxes, relationships.obboxes
-    lens = relationships.lens
-    idxs = relationships.idxs
-    relations, sbboxes, ubboxes, obboxes = split(
-        (relations, sbboxes, ubboxes, obboxes), 
-        lens
-    )
+def evaluate_relationships(all_rs, all_gt_rs, typ=None):
 
     count, phrdet, reldet = 0, 0, 0
-    for gt_idx, gt in enumerate(gt_relationships):
-        if gt.empty():
-            continue
+    rs_idxs = []
+    
+    for rs in all_rs:
+        sbboxes, scats, pbboxes, pcats, obboxes, ocats = rs.return_gt()
+        rcats = torch.stack([scats, pcats, ocats], dim=1)
         
-        gt_rs, gt_sbs, gt_ubs, gt_obs = gt.return_gt(typ)
-        count += len(gt_rs)
-
-        idx = (idxs == gt_idx).nonzero(as_tuple=False)
-        if idx.numel() == 0:
+        if rs.idx >= len(all_gt_rs) or rs.idx in rs_idxs:
             continue
-        idx = idx[0].item()
-        rs, sbs, ubs, obs = relations[idx], sbboxes[idx], ubboxes[idx], obboxes[idx]
-
-        phrdet += eval_phrdet(rs, ubs, gt_rs, gt_ubs)
-        reldet += eval_reldet(rs, sbs, obs, gt_rs, gt_sbs, gt_obs)
+        rs_idxs.append(rs.idx)
         
+        gt_rs = all_gt_rs[rs.idx]
+
+        if gt_rs.empty():
+            continue
+
+        gt_rs = gt_rs.tensor().to(sbboxes.device)
+
+        gt_sbboxes, gt_scats, gt_pbboxes, gt_pcats, gt_obboxes, gt_ocats = gt_rs.return_gt(typ)
+        gt_rcats = torch.stack([gt_scats, gt_pcats, gt_ocats], dim=1)
+
+        phrdet += eval_phrdet(pbboxes, rcats, gt_pbboxes, gt_rcats)
+        reldet += eval_reldet(sbboxes, rcats, obboxes, gt_sbboxes, gt_rcats, gt_obboxes)
+        count += len(gt_pbboxes)
+    
+    phrdet = reduce_sum(phrdet)
+    reldet = reduce_sum(reldet)
+    count = reduce_sum(count)
+
     return 100*phrdet/count, 100*reldet/count, count
 
-def evaluate(dataset, predictions, task, save_json_file="", visualize_dir=""):
+def evaluate(dataset, predictions, task, visualize_dir=""):
     dataset_name = dataset.__class__.__name__
     logger = logging.getLogger("vrd.inference")
     logger.info("Performing {} evaluation (Size: {}).".format(dataset_name, len(dataset)))
-    # eval("evaluate_" + task.lower())(dataset, predictions, logger)
 
-    relationships_25, relationships_50, relationships_100 = predictions
-    gt_relationships = dataset.relationships
-    
-    for t in range(2):
-        phr_25, rel_25, count = evaluate_relationships(relationships_25, gt_relationships, t)
-        phr_50, rel_50, count = evaluate_relationships(relationships_50, gt_relationships, t)
-        phr_100, rel_100, count = evaluate_relationships(relationships_100, gt_relationships, t)
-        logger.info(f"Type: {VR.TYPES[t]}, Overall count: {count}, {inform('PhrDet Recall', (phr_25, phr_50, phr_100), Ks=(25, 50, 100))}, {inform('RelDet Recall', (rel_25, rel_50, rel_100), Ks=(25, 50, 100))}")
+    phrs = [0, 0, 0]
+    rels = [0, 0, 0]
+    counts = [0, 0, 0]
 
-    phr_25, rel_25, count = evaluate_relationships(relationships_25, gt_relationships)
-    phr_50, rel_50, count = evaluate_relationships(relationships_50, gt_relationships)
-    phr_100, rel_100, count = evaluate_relationships(relationships_100, gt_relationships)
-    logger.info(f"Type: All, Overall count: {count}, {inform('PhrDet Recall', (phr_25, phr_50, phr_100), Ks=(25, 50, 100))}, {inform('RelDet Recall', (rel_25, rel_50, rel_100), Ks=(25, 50, 100))}")
-    if len(dataset) > 2:
-        return    
-
-    for i in range(len(dataset)):
-        relations = relationships_25.relations
-        sbboxes, ubboxes, obboxes = relationships_25.sbboxes, relationships_25.ubboxes, relationships_25.obboxes
-        lens = relationships_25.lens
-        idxs = relationships_25.idxs
-        relations, sbboxes, ubboxes, obboxes = split(
-            (relations, sbboxes, ubboxes, obboxes), 
-            lens
-        )
-        dataset.visualize(sbboxes[i], relations[i][:, 0], ubboxes[i], relations[i][:, 1], obboxes[i], relations[i][:, 2], idxs[i])
-
+    for i, all_rs in enumerate(predictions):
+        phrs[i], rels[i], counts[i] = evaluate_relationships(all_rs, dataset.all_relationships)
+        
+    logger.info(
+        f"Type: All, Overall count: {counts[0]}, {inform('PhrDet Recall', phrs, Ks=(25, 50, 100))}, {inform('RelDet Recall', rels, Ks=(25, 50, 100))}"
+    )
     
     
         
