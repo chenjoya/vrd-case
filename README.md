@@ -3,14 +3,15 @@
 This repository supports visual relationship detection (VRD) on VR dataset with state-of-the-art performance.
 
 ## Install
-```
+```python
 # install pytorch (other version is okay)
 conda install pytorch torchvision cudatoolkit=10.2 -c pytorch
 
 # install some python libs
 pip install yacs tqdm opencv-python
 
-# download the VR dataset (https://cs.stanford.edu/people/ranjaykrishna/vrd/), and create a soft link to here
+# download the VR dataset (https://cs.stanford.edu/people/ranjaykrishna/vrd/) as vr/, and create a soft link to here
+mkdir datasets/
 ln -s ~/data/vr/ datasets/
 
 # please organize the dataset files according to the following structure
@@ -23,7 +24,7 @@ ln -s ~/data/vr/ datasets/
 
 # download the bert relationship feature in google cloud
 mkdir bert/
-# link: 
+# link: https://drive.google.com/file/d/1HkPdLqFYxQnYEgK3VFRGFmhdlXHNaA7h/view?usp=sharing
 ```
 
 ## Training and Inference
